@@ -24,6 +24,12 @@ contract Voting is Ownable {
     }
 
     WorkflowStatus public workflowStatus = WorkflowStatus.RegisteringVoters;
+    mapping(address => Voter) VoterMap;
+    mapping(uint256 => Proposal) ProposalMap;
+
+    uint256 private nonce = 1;
+    string private winner;
+    uint256 private score;
 
     event VoterRegistered(address voterAddress);
     event WorkflowStatusChange(
@@ -33,12 +39,9 @@ contract Voting is Ownable {
     event ProposalRegistered(uint256 proposalId);
     event Voted(address voter, uint256 proposalId);
 
-    mapping(address => Voter) VoterMap;
-    mapping(uint256 => Proposal) ProposalMap;
+    //modifier
 
-    uint256 private nonce = 1;
-    string private winner;
-    uint256 private score;
+    //constructor
 
     function addWhiteList(address _address) public onlyOwner {
         require(
@@ -70,14 +73,16 @@ contract Voting is Ownable {
     }
 
     function sendProposal(string memory proposal) public {
-        require(
-            VoterMap[msg.sender].isRegistered == true,
-            "You are not whitelisted"
-        );
+        require(VoterMap[msg.sender].isRegistered, "You are not whitelisted");
         require(
             workflowStatus == WorkflowStatus.ProposalsRegistrationStarted,
             "The proposal session doesn't started yet"
         );
+        require(
+            bytes(proposal).length != 0,
+            "The proposal description is not valid"
+        );
+
         ProposalMap[nonce].description = proposal;
         emit ProposalRegistered(nonce);
         nonce++;
@@ -86,7 +91,7 @@ contract Voting is Ownable {
     function seeProposition(uint256 _proposalId)
         public
         view
-        returns (string memory)
+        returns (Proposal)
     {
         require(
             VoterMap[msg.sender].isRegistered == true,
@@ -96,17 +101,13 @@ contract Voting is Ownable {
             bytes(ProposalMap[_proposalId].description).length != 0,
             "The proposal doesn't exist"
         );
-        return ProposalMap[_proposalId].description;
+        return ProposalMap[_proposalId];
     }
 
     function endProposalsSession() public onlyOwner {
         require(
             workflowStatus == WorkflowStatus.ProposalsRegistrationStarted,
             "The session hasn't started"
-        );
-        require(
-            workflowStatus != WorkflowStatus.ProposalsRegistrationEnded,
-            "already ended"
         );
         workflowStatus = WorkflowStatus.ProposalsRegistrationEnded;
         emit WorkflowStatusChange(
@@ -116,10 +117,6 @@ contract Voting is Ownable {
     }
 
     function startVoteSession() public onlyOwner {
-        require(
-            workflowStatus != WorkflowStatus.VotingSessionStarted,
-            "The session is already started"
-        );
         require(
             workflowStatus == WorkflowStatus.ProposalsRegistrationEnded,
             "The session hasn't started"
@@ -132,33 +129,24 @@ contract Voting is Ownable {
     }
 
     function sendVote(uint256 _proposalId) public {
-        require(
-            VoterMap[msg.sender].hasVoted == false,
-            "You have already voted"
-        );
-        require(
-            VoterMap[msg.sender].isRegistered == true,
-            "You are not whitelisted"
-        );
+        require(!VoterMap[msg.sender].hasVoted, "You have already voted");
+        require(VoterMap[msg.sender].isRegistered, "You are not whitelisted");
         require(
             workflowStatus == WorkflowStatus.VotingSessionStarted,
             "The session doesn't have started yet"
         );
-        require(
-            bytes(ProposalMap[_proposalId].description).length != 0,
-            "The proposal doesn't exist"
-        );
+        require(_proposalId < nonce, "The proposal doesn't exist");
         ProposalMap[_proposalId].voteCount += 1;
         VoterMap[msg.sender].votedProposalId = _proposalId;
         VoterMap[msg.sender].hasVoted = true;
+        if (ProposalMap[_proposalId].voteCount > score) {
+            winner = ProposalMap[_proposalId].description;
+            score = ProposalMap[_proposalId].voteCount;
+        }
         emit Voted(msg.sender, _proposalId);
     }
 
     function endVoteSession() public onlyOwner {
-        require(
-            workflowStatus != WorkflowStatus.VotingSessionEnded,
-            "The session is already started"
-        );
         require(
             workflowStatus == WorkflowStatus.VotingSessionStarted,
             "The vote session hasn't started"
@@ -180,10 +168,7 @@ contract Voting is Ownable {
             workflowStatus == WorkflowStatus.VotingSessionEnded,
             "The session is not ended"
         );
-        require(
-            bytes(ProposalMap[_proposalId].description).length != 0,
-            "The proposal doesn't exist"
-        );
+        require(_proposalId < nonce, "The proposal doesn't exist");
         return ProposalMap[_proposalId].voteCount;
     }
 
@@ -192,29 +177,40 @@ contract Voting is Ownable {
             workflowStatus == WorkflowStatus.VotingSessionEnded,
             "The session is not ended"
         );
-        require(
-            bytes(ProposalMap[_proposalId].description).length != 0,
-            "The proposal doesn't exist"
-        );
+        require(_proposalId < nonce, "The proposal doesn't exist");
         winner = ProposalMap[_proposalId].description;
         score = ProposalMap[_proposalId].voteCount;
         workflowStatus = WorkflowStatus.VotesTallied;
+        emit WorkflowStatusChange(
+            WorkflowStatus.VotingSessionEnded,
+            WorkflowStatus.VotesTallied
+        );
     }
 
-    function getWinner() public view returns (string memory) {
+    function countVote() public onlyOwner {
+        require(
+            workflowStatus == WorkflowStatus.VotingSessionEnded,
+            "The session is not ended"
+        );
+        workflowStatus = WorkflowStatus.VotesTallied;
+        emit WorkflowStatusChange(
+            WorkflowStatus.VotingSessionEnded,
+            WorkflowStatus.VotesTallied
+        );
+    }
+
+    function getWinner() public view returns (Proposal) {
         require(
             workflowStatus == WorkflowStatus.VotesTallied,
             "The vote is not tallied yet"
         );
-        return winner;
-    }
-
-    function winnerDetails() public view returns (uint256) {
-        require(
-            workflowStatus == WorkflowStatus.VotesTallied,
-            "The vote is not tallied yet"
-        );
-        return score;
+        uint256 countMax;
+        for (uint256 i = 0; i < nonce; i++) {
+            if (ProposalMap[i].voteCount > countMax) {
+                countMax = ProposalMap[i].voteCount;
+            }
+        }
+        return ProposalMap[countMax];
     }
 
     function votedFor(address _address) public view returns (uint256) {
